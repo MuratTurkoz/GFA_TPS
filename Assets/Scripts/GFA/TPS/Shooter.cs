@@ -1,7 +1,9 @@
 using System.Collections;
 using System.Collections.Generic;
+using GFA.TPS.Movement;
 using GFA.TPS.WeaponSystem;
 using UnityEngine;
+using UnityEngine.Pool;
 using UnityEngine.Serialization;
 
 
@@ -15,8 +17,11 @@ namespace GFA.TPS
         private float _recoilValue = 0f;
 
         private float _lastShootTime;
-        public bool CanShoot => Time.time > _lastShootTime + _weapon.FireRate;
+        public bool CanShoot => Time.time > _lastShootTime + (_weapon.FireRate / AttackSpeedMultipler);
         
+        public float AttackSpeedMultipler { get; set; } = 1;
+        public float BaseDamage { get; set; }
+
         [SerializeField]
         private GameObject _defaultProjectilePrefab;
         
@@ -25,6 +30,54 @@ namespace GFA.TPS
         [SerializeField]
         private Transform _weaponContainer;
 
+        private static IObjectPool<GameObject> _projectilePool;
+
+        private void Awake()
+        {
+            _projectilePool = new ObjectPool<GameObject>(CreatePoolProjectile, OnGetPoolProjectile, OnReleasePoolObject, OnDestroyFromPool);
+        }
+
+        private void OnDestroyFromPool(GameObject obj)
+        {
+            Destroy(obj);
+        }
+
+
+        private void OnReleasePoolObject(GameObject obj)
+        {
+            if (obj.TryGetComponent<ProjectileMovement>(out var movement))
+            {
+                movement.enabled = false;
+            }
+        }
+
+        private void OnGetPoolProjectile(GameObject obj)
+        {
+            if (obj.TryGetComponent<ProjectileMovement>(out var movement))
+            {
+                movement.enabled = true;
+                movement.ResetSpawnTime();
+            }
+        }
+
+        private GameObject CreatePoolProjectile()
+        {
+            var projectileToInstantiate = _defaultProjectilePrefab;
+            
+            if (_weapon.ProjectilePrefab)
+            {
+                projectileToInstantiate = _weapon.ProjectilePrefab;
+            }
+
+            var inst = Instantiate(projectileToInstantiate, _activeWeaponGraphics.ShootTransform.position, _activeWeaponGraphics.ShootTransform.rotation);
+            
+            if (inst.TryGetComponent<ProjectileMovement>(out var projectileMovement))
+            {
+                projectileMovement.DestroyRequested += () => { _projectilePool.Release(inst); };
+            }
+
+            return inst;
+        }
 
         private void Start()
         {
@@ -67,17 +120,21 @@ namespace GFA.TPS
             if (!CanShoot) return;
 
 
-            var projectileToInstantiate = _defaultProjectilePrefab;
-            
-            if (_weapon.ProjectilePrefab)
-            {
-                projectileToInstantiate = _weapon.ProjectilePrefab;
-            }
+            var inst = _projectilePool.Get();
+            inst.transform.position = _activeWeaponGraphics.ShootTransform.position;
+            inst.transform.rotation = _activeWeaponGraphics.ShootTransform.rotation;
 
-            var inst = Instantiate(projectileToInstantiate, _activeWeaponGraphics.ShootTransform.position, _activeWeaponGraphics.ShootTransform.rotation);
+
+            var trail = inst.GetComponentInChildren<TrailRenderer>();
+            if (trail)
+            {
+                trail.Clear();
+                //StartCoroutine(ClearTrailRenderedDelayed(trail));
+            }
+            
             if (inst.TryGetComponent<ProjectileDamage>(out var projectileDamage))
             {
-                projectileDamage.Damage = _weapon.BaseDamage;
+                projectileDamage.Damage = _weapon.BaseDamage + BaseDamage;
             }
 
             var rand = Random.value;
